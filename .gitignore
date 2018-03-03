@@ -1,0 +1,12 @@
+*.o
+*.d
+*.swp
+avrfloppy
+*.eep
+*.hex
+*.map
+*-cache.lib
+*.kicad_pcb-bak
+*.net
+*.dcm
+*.bak
