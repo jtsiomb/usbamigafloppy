@@ -1,11 +1,11 @@
 PREFIX = /usr/local
 
-src = $(wildcard src/*.c)
+src = $(wildcard src/*.c) $(wildcard src/unix/*.c)
 obj = $(src:.c=.o)
 dep = $(obj:.o=.d)
 bin = amigafloppy
 
-CFLAGS = -pedantic -Wall -g
+CFLAGS = -pedantic -Wall -g -Isrc
 
 $(bin): $(obj)
 	$(CC) -o $@ $(obj) $(LDFLAGS)
