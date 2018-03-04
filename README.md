@@ -13,7 +13,7 @@ Tsiombikas. Parts of the `amigafloppy` program are also taken from the original
 `AmigaFloppyReader` program by Rob Smith.
 
 The new AVR hardware is designed to be compatible with the original host
-software, so you may use the `AmigaFloppyReader` or AmigaFloppyReaderWin`
+software, so you may use the `AmigaFloppyReader` or `AmigaFloppyReaderWin`
 programs from Rob's project, if you prefer.
 
 Directory structure:
@@ -32,6 +32,7 @@ Creative Commons Attribution Share-Alike license. See `LICENSE.hw` for details.
 Software License
 ----------------
 Copyright (C) 2018 John Tsiombikas <nuclear@member.fsf.org>
+
 Copyright (C) 2017 Rob Smith <rob@robsmithdev.co.uk>
 
 Software components of this project (host program and firmware) are released as
