@@ -1,7 +1,8 @@
 *.o
 *.d
 *.swp
-avrfloppy
+amigafloppy/amigafloppy
+fw/avrfloppy
 *.eep
 *.hex
 *.map
