@@ -13,7 +13,7 @@ Tsiombikas. Parts of the `amigafloppy` program are also taken from the original
 `AmigaFloppyReader` program by Rob Smith.
 
 The new AVR hardware is designed to be compatible with the original host
-software, so you may use the `AmigaFloppyReader` or AmigaFloppyReaderWin`
+software, so you may use the `AmigaFloppyReader` or `AmigaFloppyReaderWin`
 programs from Rob's project, if you prefer.
 
 Directory structure:
