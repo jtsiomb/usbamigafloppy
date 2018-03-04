@@ -32,6 +32,7 @@ Creative Commons Attribution Share-Alike license. See `LICENSE.hw` for details.
 Software License
 ----------------
 Copyright (C) 2018 John Tsiombikas <nuclear@member.fsf.org>
+
 Copyright (C) 2017 Rob Smith <rob@robsmithdev.co.uk>
 
 Software components of this project (host program and firmware) are released as
