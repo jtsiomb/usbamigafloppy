@@ -567,7 +567,8 @@ static void read_track_data_fast(void)
 				data_output_byte |= 3;
 				total_bits += 4;
 			} else {
-				data_output_byte |= 2, total_bits += 3;
+				data_output_byte |= 2;
+				total_bits += 3;
 			}
 
 			/* Wait until pin is high again */

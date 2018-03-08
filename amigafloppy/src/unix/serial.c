@@ -23,6 +23,7 @@ int ser_open(const char *port, int baud, unsigned int mode)
 	}
 
 	if((fd = open(port, O_RDWR | O_NOCTTY)) == -1) {
+		fprintf(stderr, "ser_open: failed to open device: %s: %s\n", port, strerror(errno));
 		return -1;
 	}
 
@@ -128,12 +129,12 @@ int ser_wait(int fd, long msec)
 	return FD_ISSET(fd, &rd);
 }
 
-int ser_write(int fd, const char *buf, int count)
+int ser_write(int fd, const void *buf, int count)
 {
 	return write(fd, buf, count);
 }
 
-int ser_read(int fd, char *buf, int count)
+int ser_read(int fd, void *buf, int count)
 {
 	return read(fd, buf, count);
 }

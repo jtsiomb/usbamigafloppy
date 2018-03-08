@@ -15,8 +15,8 @@ int ser_pending(int fd);
 /* if msec < 0: wait for ever */
 int ser_wait(int fd, long msec);
 
-int ser_write(int fd, const char *buf, int count);
-int ser_read(int fd, char *buf, int count);
+int ser_write(int fd, const void *buf, int count);
+int ser_read(int fd, void *buf, int count);
 
 void ser_printf(int fd, const char *fmt, ...);
 char *ser_getline(int fd, char *buf, int bsz);

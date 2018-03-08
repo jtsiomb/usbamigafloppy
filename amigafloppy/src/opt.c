@@ -1,8 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <alloca.h>
+#include <unistd.h>
+#include <pwd.h>
 #include "opt.h"
 
 static void print_usage(const char *argv0);
+static int load_config(void);
+static char *skip_wspace(char *s);
+static char *cleanstr(char *s);
+static int strbool(char *s);
 
 #ifndef WIN32
 #define DEVFILE_FMT	"/dev/ttyUSB%d"
@@ -13,7 +22,7 @@ static void print_usage(const char *argv0);
 #endif
 
 
-int parse_args(int argc, char **argv)
+int init_options(int argc, char **argv)
 {
 	int i, num;
 	char *endp;
@@ -21,6 +30,8 @@ int parse_args(int argc, char **argv)
 
 	opt.devfile = DEV_DEFAULT;
 	opt.verbose = 1;
+
+	load_config();
 
 	for(i=1; i<argc; i++) {
 		if(argv[i][0] == '-') {
@@ -36,7 +47,7 @@ int parse_args(int argc, char **argv)
 
 				case 'd':
 					num = strtol(argv[++i], &endp, 10);
-					if(endp != argv[i]) {
+					if(endp == argv[i]) {
 						opt.devfile = argv[i];
 					} else {
 						sprintf(devbuf, DEVFILE_FMT, num);
@@ -90,4 +101,101 @@ static void print_usage(const char *argv0)
 	printf(" -d <device>  specify which device to use (default: " DEV_DEFAULT ")\n");
 	printf(" -s           run silent, print only errors\n");
 	printf(" -h           print help and exit\n");
+}
+
+
+static int load_config(void)
+{
+	FILE *fp;
+	int val;
+	char buf[512], *line, *endp, *valstr;
+	char *fname;
+
+	if((fp = fopen("amigafloppy.conf", "r"))) {
+		fname = alloca(20);
+		strcpy(fname, "amigafloppy.conf");
+	} else {
+		char *env;
+		struct passwd *pw;
+
+		if((pw = getpwuid(getuid()))) {
+			sprintf(buf, "%s/.amigafloppy.conf", pw->pw_dir);
+		} else if((env = getenv("HOME"))) {
+			sprintf(buf, "%s/.amigafloppy.conf", env);
+		} else {
+			return -1;
+		}
+		if(!(fp = fopen(buf, "r"))) {
+			return -1;
+		}
+		fname = alloca(strlen(buf) + 1);
+		strcpy(fname, buf);
+	}
+
+	while(fgets(buf, sizeof buf, fp)) {
+		line = skip_wspace(buf);
+		if((endp = strchr(line, '#'))) {
+			*endp = 0;
+		}
+		if(!*line) continue;
+		if(!(endp = strchr(line, '=')) || !*(valstr = cleanstr(endp + 1))) {
+			fprintf(stderr, "config file: %s: invalid line: %s\n", fname, line);
+			continue;
+		}
+		*endp = 0;
+		line = cleanstr(line);
+
+		if(strcasecmp(line, "verify") == 0) {
+			if((val = strbool(valstr)) == -1) {
+				fprintf(stderr, "config file: %s: verify must be followed by a boolean value (found: %s)\n", fname, valstr);
+				continue;
+			}
+			opt.verify = val;
+
+		} else if(strcasecmp(line, "device") == 0) {
+			if(!(opt.devfile = malloc(strlen(valstr) + 1))) {
+				fprintf(stderr, "failed to allocate device filename buffer (%s)\n", valstr);
+				abort();
+			}
+			strcpy(opt.devfile, valstr);
+
+		} else {
+			fprintf(stderr, "config file: %s: invalid option: %s\n", fname, line);
+		}
+	}
+
+	fclose(fp);
+	return 0;
+}
+
+static char *skip_wspace(char *s)
+{
+	while(*s && isspace(*s)) s++;
+	return s;
+}
+
+static char *cleanstr(char *s)
+{
+	char *endp;
+	if(!*(s = skip_wspace(s))) return s;
+	endp = s + strlen(s) - 1;
+	while(endp > s && isspace(*endp)) endp--;
+	endp[1] = 0;
+	return s;
+}
+
+static int strbool(char *s)
+{
+	if(s[1] == 0) {
+		if(*s == '1') return 1;
+		if(*s == '0') return 0;
+		return -1;
+	}
+	if(strcasecmp(s, "true") == 0 || strcasecmp(s, "yes") == 0 || strcasecmp(s, "on") == 0) {
+		return 1;
+	}
+	if(strcasecmp(s, "false") == 0 || strcasecmp(s, "no") == 0 || strcasecmp(s, "off") == 0) {
+		return 0;
+	}
+	return -1;
 }
