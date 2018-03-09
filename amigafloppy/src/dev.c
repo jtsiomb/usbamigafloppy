@@ -1,16 +1,48 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
+#include <stdint.h>
 #include <assert.h>
 #include "dev.h"
 #include "serial.h"
 #include "opt.h"
+
+#ifdef __GNUC__
+#define PACKED	__attribute__ ((packed))
+#else
+#define PACKED
+#endif
+
+#define MFM_HDR_FMT_OFFSET	(offsetof(struct sector_header, fmt) * 2)
+#define MFM_HDR_HSUM_OFFSET	(offsetof(struct sector_header, hdr_sum) * 2)
+#define MFM_HDR_DSUM_OFFSET	(offsetof(struct sector_header, data_sum) * 2)
+
+struct sector_header {
+	unsigned char magic[4];
+	unsigned char fmt;
+	unsigned char track;
+	unsigned char sector;
+	unsigned char sec_to_gap;
+	unsigned char osinfo[16];
+	uint32_t hdr_sum, data_sum;
+} PACKED;
+
+struct sector_node {
+	struct sector_header hdr;
+	unsigned char *rawptr;
+	struct sector_node *next;
+};
 
 #define TIMEOUT_MSEC	2000
 #define TRACK_SIZE		(0x1900 * 2 + 0x440)
 
 static int uncompress(unsigned char *dest, unsigned char *src, int size);
 static int align_track(unsigned char *buf, int size);
-static void decode_mfm(unsigned char *buf, int size);
+static struct sector_node *find_sectors(unsigned char *buf, int size);
+static void debug_print(unsigned char *dest, int size);
+static void dbg_print_header(struct sector_header *hdr);
+static void decode_mfm(unsigned char *dest, unsigned char *src, int blksz);
 
 static int dev_fd = -1;
 
@@ -147,6 +179,7 @@ int read_track(unsigned char *resbuf)
 	unsigned char *ptr, buf[TRACK_SIZE];
 	char waitidx = 0;
 	int sz, rdbytes, total_read = 0;
+	struct sector_node *slist;
 
 	if(command('<') <= 0) {
 		return -1;
@@ -179,10 +212,24 @@ int read_track(unsigned char *resbuf)
 	printf("total read after decompression: %d\n", total_read);
 
 	if(align_track(resbuf, total_read) == -1) {
-	//	return -1;
+		return -1;
 	}
 
-	decode_mfm(resbuf, total_read);
+	if(!(slist = find_sectors(resbuf, total_read))) {
+		fprintf(stderr, "failed to construct sector list\n");
+		return -1;
+	}
+
+	/* debug print */
+	while(slist) {
+		struct sector_node *n = slist;
+		slist = slist->next;
+
+		dbg_print_header(&n->hdr);
+		free(n);
+	}
+
+	debug_print(resbuf, total_read);
 	return 0;
 }
 
@@ -246,18 +293,24 @@ static void copy_bits(unsigned char *dest, unsigned char *src, int size, int shi
 	}
 }
 
+static const unsigned char magic[] = { 0xaa, 0xaa, 0xaa, 0xaa, 0x44, 0x89, 0x44, 0x89 };
+
+static int check_magic(unsigned char *buf)
+{
+	return memcmp(buf + 1, magic + 1, sizeof magic - 1) == 0 &&
+		(buf[0] & 0x7f) == (magic[0] & 0x7f);
+}
+
 static int align_track(unsigned char *buf, int size)
 {
 	int i, j, offset, shift = -1;
 	unsigned char *ptr = buf;
-	unsigned char magic[] = { 0xaa, 0xaa, 0xaa, 0xaa, 0x44, 0x89, 0x44, 0x89 };
 	unsigned char tmp[sizeof magic];
 
 	for(i=0; i<size - sizeof magic - 1; i++) {	/* -1 because copy_bits reads +1 byte for non-zero shifts */
 		for(j=0; j<8; j++) {
 			copy_bits(tmp, ptr, sizeof magic, j);
-			if(memcmp(tmp + 1, magic + 1, sizeof magic - 1) == 0 &&
-					(tmp[0] & 0x7f) == (magic[0] & 0x7f)) {
+			if(check_magic(tmp)) {
 				shift = j;
 				goto end_search;
 			}
@@ -274,6 +327,49 @@ end_search:
 	offset = ptr - buf;
 	printf("align_track: offset %d bytes and %d bits\n", offset, shift);
 	copy_bits(buf, ptr, size - offset - (shift ? 1 : 0), shift);
+
+	/* find and remove the gap (TODO) */
+	return 0;
+}
+
+struct sector_node *find_sectors(unsigned char *buf, int size)
+{
+	unsigned char *ptr = buf;
+	struct sector_node *node, *head = 0, *tail = 0;
+	int nfound = 0;
+
+	while(ptr - buf < size && nfound < 11) {
+		if(check_magic(ptr)) {
+			if(!(node = malloc(sizeof *node))) {
+				fprintf(stderr, "failed to allocate memory for sector list\n");
+				goto err;
+			}
+			decode_mfm((unsigned char*)&node->hdr.fmt, ptr + MFM_HDR_FMT_OFFSET, 4);
+			decode_mfm((unsigned char*)&node->hdr.hdr_sum, ptr + MFM_HDR_HSUM_OFFSET, 4);
+			decode_mfm((unsigned char*)&node->hdr.data_sum, ptr + MFM_HDR_DSUM_OFFSET, 4);
+			node->rawptr = ptr;
+			node->next = 0;
+
+			if(head) {
+				tail->next = node;
+				tail = node;
+			} else {
+				head = tail = node;
+			}
+			ptr += (512 + sizeof node->hdr) * 2;
+			++nfound;
+		} else {
+			++ptr;
+		}
+	}
+
+	return head;
+err:
+	while(head) {
+		void *tmp = head;
+		head = head->next;
+		free(tmp);
+	}
 	return 0;
 }
 
@@ -282,7 +378,7 @@ static void print_byte(unsigned char val)
 	printf("%02x ", (unsigned int)val);
 }
 
-static void decode_mfm(unsigned char *buf, int size)
+static void debug_print(unsigned char *buf, int size)
 {
 	int i = 0;
 	/* TODO */
@@ -296,4 +392,39 @@ static void decode_mfm(unsigned char *buf, int size)
 		--size;
 	}
 	if(i) putchar('\n');
+}
+
+static void dbg_print_header(struct sector_header *hdr)
+{
+	printf("Sector header\n");
+	printf("  format: %x\n", (unsigned int)hdr->fmt);
+	printf("  track: %u\n", (unsigned int)hdr->track);
+	printf("  sector: %u\n", (unsigned int)hdr->sector);
+	printf("  sectors before gap: %u\n", (unsigned int)hdr->sec_to_gap);
+	printf("  header checksum: %lu\n", (unsigned long)hdr->hdr_sum);
+	printf("  data checksum: %lu\n", (unsigned long)hdr->data_sum);
+}
+
+/* this can work in-place (dest == src) */
+static void decode_mfm(unsigned char *dest, unsigned char *src, int blksz)
+{
+	int i, j;
+
+	for(i=0; i<blksz; i++) {
+		unsigned char even = src[blksz];
+		unsigned char odd = *src++;
+
+		for(j=0; j<4; j++) {
+			*dest <<= 2;
+			if(even & 0x40) {
+				*dest |= 1;
+			}
+			if(odd & 0x40) {
+				*dest |= 2;
+			}
+			even <<= 2;
+			odd <<= 2;
+		}
+		++dest;
+	}
 }
