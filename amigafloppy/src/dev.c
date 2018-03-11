@@ -17,6 +17,7 @@
 #define MFM_HDR_FMT_OFFSET	(offsetof(struct sector_header, fmt) * 2)
 #define MFM_HDR_HSUM_OFFSET	(offsetof(struct sector_header, hdr_sum) * 2)
 #define MFM_HDR_DSUM_OFFSET	(offsetof(struct sector_header, data_sum) * 2)
+#define MFM_DATA_OFFSET		(sizeof(struct sector_header) * 2)
 
 struct sector_header {
 	unsigned char magic[4];
@@ -36,6 +37,7 @@ struct sector_node {
 
 #define TIMEOUT_MSEC	2000
 #define TRACK_SIZE		(0x1900 * 2 + 0x440)
+#define SECTORS_PER_TRACK	11
 
 static int uncompress(unsigned char *dest, unsigned char *src, int size);
 static int align_track(unsigned char *buf, int size);
@@ -149,7 +151,7 @@ int end_access(void)
 
 int select_head(int s)
 {
-	if(command(s ? ']' : '[') <= 0) {
+	if(command(s ? '[' : ']') <= 0) {
 		fprintf(stderr, "select_head(%d) failed\n", s);
 		return -1;
 	}
@@ -178,7 +180,7 @@ int read_track(unsigned char *resbuf)
 {
 	unsigned char *ptr, buf[TRACK_SIZE];
 	char waitidx = 0;
-	int sz, rdbytes, total_read = 0;
+	int i, sz, rdbytes, total_read = 0;
 	struct sector_node *slist;
 
 	if(command('<') <= 0) {
@@ -203,33 +205,39 @@ int read_track(unsigned char *resbuf)
 		total_read += rdbytes;
 
 		if(!buf[total_read - 1]) {
-			printf("total read: %d\n", total_read);
 			break;	/* end of data */
 		}
 	}
 
 	total_read = uncompress(resbuf, buf, total_read);
-	printf("total read after decompression: %d\n", total_read);
 
-	if(align_track(resbuf, total_read) == -1) {
+	/* move uncompressed data back to the temporary buffer */
+	memcpy(buf, resbuf, total_read);
+
+	if(align_track(buf, total_read) == -1) {
 		return -1;
 	}
 
-	if(!(slist = find_sectors(resbuf, total_read))) {
+	if(!(slist = find_sectors(buf, total_read))) {
 		fprintf(stderr, "failed to construct sector list\n");
 		return -1;
 	}
 
-	/* debug print */
-	while(slist) {
-		struct sector_node *n = slist;
-		slist = slist->next;
+	/* TODO: checksums */
 
-		dbg_print_header(&n->hdr);
-		free(n);
+	ptr = resbuf;
+	for(i=0; i<SECTORS_PER_TRACK; i++) {
+		struct sector_node *sec = slist;
+		while(sec) {
+			if(sec->hdr.sector == i) {
+				decode_mfm(ptr, sec->rawptr + MFM_DATA_OFFSET, 512);
+				ptr += 512;
+				break;
+			}
+			sec = sec->next;
+		}
 	}
 
-	debug_print(resbuf, total_read);
 	return 0;
 }
 
@@ -325,10 +333,9 @@ end_search:
 	}
 
 	offset = ptr - buf;
-	printf("align_track: offset %d bytes and %d bits\n", offset, shift);
+	/*printf("align_track: offset %d bytes and %d bits\n", offset, shift);*/
 	copy_bits(buf, ptr, size - offset - (shift ? 1 : 0), shift);
 
-	/* find and remove the gap (TODO) */
 	return 0;
 }
 
@@ -338,7 +345,7 @@ struct sector_node *find_sectors(unsigned char *buf, int size)
 	struct sector_node *node, *head = 0, *tail = 0;
 	int nfound = 0;
 
-	while(ptr - buf < size && nfound < 11) {
+	while(ptr - buf < size && nfound < SECTORS_PER_TRACK) {
 		if(check_magic(ptr)) {
 			if(!(node = malloc(sizeof *node))) {
 				fprintf(stderr, "failed to allocate memory for sector list\n");
