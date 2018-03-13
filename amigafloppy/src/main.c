@@ -28,7 +28,7 @@ static void print_progress(int cyl, int head);
 
 int main(int argc, char **argv)
 {
-	int i, j, status = 1;
+	int i, j, num_tries, res, status = 1;
 	unsigned char buf[TRACK_SIZE];
 
 	if(init_options(argc, argv) == -1) {
@@ -49,10 +49,14 @@ int main(int argc, char **argv)
 		move_head(i);
 		for(j=0; j<2; j++) {
 			select_head(j);
-			if(read_track(buf) == -1) {
+
+			num_tries = opt.retries;
+			while((res = read_track(buf)) == -1 && num_tries-- > 0);
+			if(res == -1) {
 				fprintf(stderr, "failed to read track %d side %d\n", i, j);
 				goto done;
 			}
+
 			if(adf_write_track(buf) == -1) {
 				fprintf(stderr, "failed to write track %d side %d to ADF image\n", i, j);
 				goto done;

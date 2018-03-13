@@ -21,6 +21,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <string.h>
 #include <stdint.h>
 #include <assert.h>
+#include <arpa/inet.h>
 #include "dev.h"
 #include "serial.h"
 #include "opt.h"
@@ -31,10 +32,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define PACKED
 #endif
 
-#define MFM_HDR_FMT_OFFSET	(offsetof(struct sector_header, fmt) * 2)
-#define MFM_HDR_HSUM_OFFSET	(offsetof(struct sector_header, hdr_sum) * 2)
-#define MFM_HDR_DSUM_OFFSET	(offsetof(struct sector_header, data_sum) * 2)
-#define MFM_DATA_OFFSET		(sizeof(struct sector_header) * 2)
+#define MFM_HDR_FMT_OFFSET		(offsetof(struct sector_header, fmt) * 2)
+#define MFM_HDR_OSINFO_OFFSET	(offsetof(struct sector_header, osinfo) * 2)
+#define MFM_HDR_HSUM_OFFSET		(offsetof(struct sector_header, hdr_sum) * 2)
+#define MFM_HDR_DSUM_OFFSET		(offsetof(struct sector_header, data_sum) * 2)
+#define MFM_DATA_OFFSET			(sizeof(struct sector_header) * 2)
 
 struct sector_header {
 	unsigned char magic[4];
@@ -62,6 +64,7 @@ static struct sector_node *find_sectors(unsigned char *buf, int size);
 static void debug_print(unsigned char *dest, int size);
 static void dbg_print_header(struct sector_header *hdr);
 static void decode_mfm(unsigned char *dest, unsigned char *src, int blksz);
+static uint32_t checksum(void *buf, int size);
 
 static int dev_fd = -1;
 
@@ -236,22 +239,33 @@ int read_track(unsigned char *resbuf)
 	}
 
 	if(!(slist = find_sectors(buf, total_read))) {
-		fprintf(stderr, "failed to construct sector list\n");
 		return -1;
 	}
-
-	/* TODO: checksums */
 
 	ptr = resbuf;
 	for(i=0; i<SECTORS_PER_TRACK; i++) {
 		struct sector_node *sec = slist;
 		while(sec) {
 			if(sec->hdr.sector == i) {
+				uint32_t sum;
+
 				decode_mfm(ptr, sec->rawptr + MFM_DATA_OFFSET, 512);
+
+				sum = checksum(ptr, 512);
+				if(sum != ntohl(sec->hdr.data_sum)) {
+					fprintf(stderr, "Track %d, sector %d data checksum error\n", sec->hdr.track, sec->hdr.sector);
+					return -1;
+				}
+
 				ptr += 512;
 				break;
 			}
 			sec = sec->next;
+		}
+
+		if(!sec) {
+			fprintf(stderr, "\nread_track: failed to find sector %d\n", i);
+			return -1;
 		}
 	}
 
@@ -361,6 +375,7 @@ struct sector_node *find_sectors(unsigned char *buf, int size)
 	unsigned char *ptr = buf;
 	struct sector_node *node, *head = 0, *tail = 0;
 	int nfound = 0;
+	uint32_t sum;
 
 	while(ptr - buf < size && nfound < SECTORS_PER_TRACK) {
 		if(check_magic(ptr)) {
@@ -369,10 +384,19 @@ struct sector_node *find_sectors(unsigned char *buf, int size)
 				goto err;
 			}
 			decode_mfm((unsigned char*)&node->hdr.fmt, ptr + MFM_HDR_FMT_OFFSET, 4);
+			decode_mfm((unsigned char*)&node->hdr.osinfo, ptr + MFM_HDR_OSINFO_OFFSET, 16);
 			decode_mfm((unsigned char*)&node->hdr.hdr_sum, ptr + MFM_HDR_HSUM_OFFSET, 4);
 			decode_mfm((unsigned char*)&node->hdr.data_sum, ptr + MFM_HDR_DSUM_OFFSET, 4);
 			node->rawptr = ptr;
 			node->next = 0;
+
+			/* verify header checksum */
+			sum = checksum(&node->hdr.fmt, 20);
+			if(sum != ntohl(node->hdr.hdr_sum)) {
+				fprintf(stderr, "Track %d, sector %d header checksum error\n", node->hdr.track, node->hdr.sector);
+				fprintf(stderr, "  calculated: %lu, on disk: %lu\n", (unsigned long)sum, (unsigned long)ntohl(node->hdr.hdr_sum));
+				goto err;
+			}
 
 			if(head) {
 				tail->next = node;
@@ -385,6 +409,11 @@ struct sector_node *find_sectors(unsigned char *buf, int size)
 		} else {
 			++ptr;
 		}
+	}
+
+	if(nfound < SECTORS_PER_TRACK) {
+		fprintf(stderr, "error while reading track: found only %d sectors\n", nfound);
+		goto err;
 	}
 
 	return head;
@@ -451,4 +480,19 @@ static void decode_mfm(unsigned char *dest, unsigned char *src, int blksz)
 		}
 		++dest;
 	}
+}
+
+static uint32_t checksum(void *buf, int size)
+{
+	int i;
+	uint32_t *p = buf;
+	uint32_t sum = 0;
+
+	size /= 4;
+
+	for(i=0; i<size; i++) {
+		uint32_t val = ntohl(*p++);
+		sum ^= val;
+	}
+	return (sum ^ (sum >> 1)) & 0x55555555;
 }

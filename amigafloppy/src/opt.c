@@ -38,6 +38,8 @@ static int strbool(char *s);
 #define DEV_DEFAULT "COM3"
 #endif
 
+#define RETRIES_DEFAULT	5
+
 
 int init_options(int argc, char **argv)
 {
@@ -47,6 +49,7 @@ int init_options(int argc, char **argv)
 
 	opt.devfile = DEV_DEFAULT;
 	opt.verbose = 1;
+	opt.retries = RETRIES_DEFAULT;
 
 	load_config();
 
@@ -69,6 +72,14 @@ int init_options(int argc, char **argv)
 					} else {
 						sprintf(devbuf, DEVFILE_FMT, num);
 						opt.devfile = devbuf;
+					}
+					break;
+
+				case 'r':
+					opt.retries = strtol(argv[++i], &endp, 10);
+					if(endp == argv[i] || opt.retries < 0) {
+						fprintf(stderr, "-r must be followed by the number of retries\n");
+						return -1;
 					}
 					break;
 
@@ -117,6 +128,7 @@ static void print_usage(const char *argv0)
 	printf(" -v           verify after writing (default: no verification)\n");
 	printf(" -d <device>  specify which device to use (default: " DEV_DEFAULT ")\n");
 	printf(" -s           run silent, print only errors\n");
+	printf(" -r <retries> how many retries to attempt while reading (default: %d)\n", RETRIES_DEFAULT);
 	printf(" -h           print help and exit\n");
 }
 

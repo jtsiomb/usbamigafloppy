@@ -24,6 +24,7 @@ struct options {
 	int verify;
 	int write_disk;
 	int verbose;
+	int retries;
 } opt;
 
 int init_options(int argc, char **argv);
