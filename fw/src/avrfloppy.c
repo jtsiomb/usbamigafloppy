@@ -1,6 +1,6 @@
 /* USB floppy controller for amiga disks
  *
- * Copyright (C) 2017 Robert Smith (@RobSmithDev)
+ * Copyright (C) 2017-2018 Robert Smith (@RobSmithDev)
  * Copyright (C) 2018 John Tsiombikas <nuclear@member.fsf.org>
  *
  * This program is free software; you can redistribute it and/or
@@ -79,10 +79,11 @@ static void step_direction_head(void);
 static void prep_serial_interface(void);
 static inline unsigned char read_byte_from_uart(void);
 static inline void write_byte_to_uart(const char value);
-static void go_to_track0(void);
+static int goto_track0(void);
 static int goto_track_x(void);
 static void write_track_from_uart(void);
 static void read_track_data_fast(void);
+static void run_diagnostic(void);
 
 static int current_track; /* The current track that the head is over */
 static int drive_enabled; /* If the drive has been switched on or not */
@@ -137,7 +138,7 @@ static void loop(void)
 		write_byte_to_uart('V');  /* Followed */
 		write_byte_to_uart('1');  /* By */
 		write_byte_to_uart('.');  /* Version */
-		write_byte_to_uart('1');  /* Number */
+		write_byte_to_uart('2');  /* Number */
 		break;
 
 		/* Command "." means go back to track 0 */
@@ -145,8 +146,11 @@ static void loop(void)
 		if(!drive_enabled) {
 			write_byte_to_uart('0');
 		} else {
-			go_to_track0();	/* reset */
-			write_byte_to_uart('1');
+			if(goto_track0() != -1) {	/* reset */
+				write_byte_to_uart('1');
+			} else {
+				write_byte_to_uart('#');
+			}
 		}
 		break;
 
@@ -258,6 +262,10 @@ static void loop(void)
 		}
 		break;
 
+	case '&':
+		run_diagnostic();
+		break;
+
 	default:
 		/* We don't recognise the command! */
 		write_byte_to_uart('!'); /* error */
@@ -321,15 +329,25 @@ static inline void write_byte_to_uart(const char value)
 	UDR0 = value;
 }
 
-/* Rewinds the head back to Track 0 */
-static void go_to_track0(void)
+/* Rewinds the head back to track 0 */
+static int goto_track0(void)
 {
+	int steps = 0;
+
 	/* Set the direction to go backwards */
 	MOTOR_DIR(MOTOR_TRACK_DECREASE);
 	while((TRACK0_PORT & TRACK0_BIT)) {
 		step_direction_head();	/* Keep moving the head until we see the TRACK 0 detection pin */
+
+		if(++steps > 170) {
+			/* we've stepped twice as much as the maximum possible steps needed, and still
+			 * haven't reached track 0
+			 */
+			return -1;
+		}
 	}
 	current_track = 0;	/* Reset the track number */
+	return 0;
 }
 
 /* Goto a specific track.  During testing it was easier for the track number
@@ -474,7 +492,9 @@ static void write_track_from_uart(void)
 	/* Reset the counter, ready for writing */
 	TCNT2 = 0;
 
-	/* Loop them bytes */
+	/* ideally we'd use an ISR here, but there's just too much overhead even with naked
+	 * ISRs to do this (preserving registers, etc)
+	 */
 	for(i=0; i<num_bytes; i++) {
 		/* Should never happen, but we'll wait here if theres no data */
 		if(serial_bytes_in_use < 1) {
@@ -491,24 +511,29 @@ static void write_track_from_uart(void)
 		current_byte = SERIAL_BUFFER[serial_read_pos++];
 		serial_bytes_in_use--;
 
+		/* there's a small possibility we actually get back here before TCNT2 overflows
+		 * back to zero, causing this to write early.
+		 */
+		while(TCNT2 >= 240);
+
 		/* Now we write the data. Hopefully by the time we get back to the top
 		 * everything is ready again
 		 */
-		WRITE_BIT(16, 0x80);
+		WRITE_BIT(0x10, 0x80);
 		CHECK_SERIAL();
-		WRITE_BIT(48, 0x40);
+		WRITE_BIT(0x30, 0x40);
 		CHECK_SERIAL();
-		WRITE_BIT(80, 0x20);
+		WRITE_BIT(0x50, 0x20);
 		CHECK_SERIAL();
-		WRITE_BIT(112, 0x10);
+		WRITE_BIT(0x70, 0x10);
 		CHECK_SERIAL();
-		WRITE_BIT(144, 0x08);
+		WRITE_BIT(0x90, 0x08);
 		CHECK_SERIAL();
-		WRITE_BIT(176, 0x04);
+		WRITE_BIT(0xb0, 0x04);
 		CHECK_SERIAL();
-		WRITE_BIT(208, 0x02);
+		WRITE_BIT(0xd0, 0x02);
 		CHECK_SERIAL();
-		WRITE_BIT(240, 0x01);
+		WRITE_BIT(0xf0, 0x01);
 	}
 	WGATE_PORT |= WGATE_BIT;
 
@@ -586,4 +611,69 @@ static void read_track_data_fast(void)
 
 	/* Disable the counter */
 	TCCR2B = 0;	  /* No Clock (turn off) */
+}
+
+static void run_diagnostic(void)
+{
+	int i, state1, state2, res;
+	char test;
+
+	test = read_byte_from_uart();
+	switch(test) {
+	case '1':	/* turn off CTS */
+		CTS_PORT &= ~CTS_BIT;
+		write_byte_to_uart('1');
+		read_byte_from_uart();
+		write_byte_to_uart('1');
+		break;
+
+	case '2':	/* turn on CTS */
+		CTS_PORT |= CTS_BIT;
+		write_byte_to_uart('1');
+		read_byte_from_uart();
+		write_byte_to_uart('1');
+		break;
+
+	case '3':	/* index pulse test (with timeout) */
+		state1 = state2 = res = 0;
+
+		/* At the 300 RPM (5 turns per second) this runs at, this loop needs to
+		 * run a few times to check for index pulses. This runs for approx 1 sec
+		 */
+		for(i=0; i<20 * 60000; i++) {
+			if(INDEX_PORT & INDEX_BIT) {
+				state1 = 1;
+			} else {
+				state2 = 1;
+			}
+			if(state1 && state2) {
+				res = 1;
+				break;
+			}
+		}
+		write_byte_to_uart(res ? '1' : '0');
+		break;
+
+	case '4':	/* data pulse test (with timeout) */
+		state1 = state2 = res = 0;
+
+		for(i=0; i<20 * 60000; i++) {
+			if(RDATA_PORT & RDATA_BIT) {
+				state1 = 1;
+			} else {
+				state2 = 1;
+			}
+			if(state1 && state2) {
+				res = 1;
+				break;
+			}
+		}
+
+		write_byte_to_uart(res ? '1' : '0');
+		break;
+
+	default:
+		write_byte_to_uart('0');
+		break;
+	}
 }
