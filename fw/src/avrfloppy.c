@@ -82,6 +82,7 @@ static inline void write_byte_to_uart(const char value);
 static int goto_track0(void);
 static int goto_track_x(void);
 static void write_track_from_uart(void);
+static void erase_track(void);
 static void read_track_data_fast(void);
 static void run_diagnostic(void);
 
@@ -138,7 +139,7 @@ static void loop(void)
 		write_byte_to_uart('V');  /* Followed */
 		write_byte_to_uart('1');  /* By */
 		write_byte_to_uart('.');  /* Version */
-		write_byte_to_uart('2');  /* Number */
+		write_byte_to_uart('3');  /* Number */
 		break;
 
 		/* Command "." means go back to track 0 */
@@ -202,6 +203,20 @@ static void loop(void)
 			} else {
 				write_byte_to_uart('1');
 				write_track_from_uart();
+			}
+		}
+		break;
+
+	case 'X':
+		/* command "X" Erase current track (writes 0xAA to it) */
+		if(!drive_enabled) {
+			write_byte_to_uart('0');
+		} else {
+			if(!in_write_mode) {
+				write_byte_to_uart('0');
+			} else {
+				write_byte_to_uart('1');
+				erase_track();
 			}
 		}
 		break;
@@ -543,6 +558,61 @@ static void write_track_from_uart(void)
 
 	/* Disable the 500khz signal */
 	TCCR2B = 0;   /* No Clock (turn off) */
+}
+
+
+static void erase_track(void)
+{
+	int i;
+	unsigned char current_byte;
+
+	/* configure timer 2 just as a counter in NORMAL mode */
+	TCCR2A = 0;		/* no physical output port pins and normal operation */
+	TCCR2B = (1 << CS20);	/* prescale = 1 */
+
+	/* check if it's write protected */
+	if((WPROT_PORT & WPROT_BIT) == 0) {
+		write_byte_to_uart('N');
+		WGATE_PORT |= WGATE_BIT;
+		return;
+	}
+	write_byte_to_uart('Y');
+
+	LED_PORT |= LED_BIT;
+
+	/* enable writing */
+	WGATE_PORT &= ~WGATE_BIT;
+
+	/* reset the counter, ready for writing */
+	TCNT2 = 0;
+	current_byte = 0xaa;
+
+	/* write complete blank track - at 300rpm, 500kbps, a track takes approx 1/5
+	 * second to write. this is roughly 12500 bytes. our RAW read is 13888 bytes,
+	 * so we'll use that just to make sure we get every last bit.
+	 */
+	for(i=0; i<RAW_TRACKDATA_LENGTH; i++) {
+		WRITE_BIT(0x10, 0x80);
+		WRITE_BIT(0x30, 0x40);
+		WRITE_BIT(0x50, 0x20);
+		WRITE_BIT(0x70, 0x10);
+		WRITE_BIT(0x90, 0x08);
+		WRITE_BIT(0xb0, 0x04);
+		WRITE_BIT(0xd0, 0x02);
+		WRITE_BIT(0xf0, 0x01);
+
+		while(TCNT2 >= 240);
+	}
+
+	/* turn the write head off */
+	WGATE_PORT |= WGATE_BIT;
+
+	/* done! */
+	write_byte_to_uart('1');
+	LED_PORT &= ~LED_BIT;
+
+	/* disable the 500khz signal */
+	TCCR2B = 0;	/* no clock (turn off) */
 }
 
 
