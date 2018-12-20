@@ -21,6 +21,12 @@ Directory structure:
   * `fw` - firmware for the AVR microcontroller.
   * `amigafloppy` - host program for reading/writing ADF images.
 
+Note: The `amigafloppy` host program is not completed yet. And it's not a high
+priority, since Rob's original .NET programs seem to work fine with wine on
+GNU/Linux. I'd like to complete it at some stage, but I can't say when that will
+happen. Contributions are of course welcome, but please coordinate with me
+first. Until then, please use `AmigaFloppyReader` or `AmigaFloppyReaderWin`.
+
 Hardware License
 ----------------
 Copyright (C) 2018 John Tsiombikas <nuclear@member.fsf.org>
